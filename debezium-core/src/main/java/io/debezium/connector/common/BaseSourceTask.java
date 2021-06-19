@@ -61,6 +61,7 @@ public abstract class BaseSourceTask extends SourceTask {
     /**
      * The change event source coordinator for those connectors adhering to the new
      * framework structure, {@code null} for legacy-style connectors.
+     * coordinator：协调者
      */
     private ChangeEventSourceCoordinator coordinator;
 
@@ -71,6 +72,9 @@ public abstract class BaseSourceTask extends SourceTask {
      */
     private volatile Map<String, ?> lastOffset;
 
+    /**
+     * 重试重启等待间隔
+     */
     private Duration retriableRestartWait;
 
     @Override
@@ -82,6 +86,10 @@ public abstract class BaseSourceTask extends SourceTask {
         stateLock.lock();
 
         try {
+            //从state的初始化我们看到，state最开始的状态就是stopped
+            //如果state是 stopped状态，那么就将其更新为running，此时返回true。然后继续往下执行
+            //（1）如果state不是stopped状态或者  没有将其设置为running则返回false，此时直接退出
+
             if (!state.compareAndSet(State.STOPPED, State.RUNNING)) {
                 LOGGER.info("Connector has already been started");
                 return;

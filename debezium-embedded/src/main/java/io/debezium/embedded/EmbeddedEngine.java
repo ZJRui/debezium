@@ -5,24 +5,16 @@
  */
 package io.debezium.embedded;
 
-import java.io.IOException;
-import java.time.Duration;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.Properties;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
-import java.util.stream.Collectors;
-
+import io.debezium.annotation.ThreadSafe;
+import io.debezium.config.Configuration;
+import io.debezium.config.Field;
+import io.debezium.config.Instantiator;
+import io.debezium.engine.DebeziumEngine;
+import io.debezium.engine.StopEngineException;
+import io.debezium.engine.spi.OffsetCommitPolicy;
+import io.debezium.pipeline.ChangeEventSourceCoordinator;
+import io.debezium.util.Clock;
+import io.debezium.util.VariableLatch;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigDef.Importance;
 import org.apache.kafka.common.config.ConfigDef.Type;
@@ -38,26 +30,17 @@ import org.apache.kafka.connect.source.SourceConnector;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.apache.kafka.connect.source.SourceTask;
 import org.apache.kafka.connect.source.SourceTaskContext;
-import org.apache.kafka.connect.storage.Converter;
-import org.apache.kafka.connect.storage.FileOffsetBackingStore;
-import org.apache.kafka.connect.storage.KafkaOffsetBackingStore;
-import org.apache.kafka.connect.storage.OffsetBackingStore;
-import org.apache.kafka.connect.storage.OffsetStorageReader;
-import org.apache.kafka.connect.storage.OffsetStorageReaderImpl;
-import org.apache.kafka.connect.storage.OffsetStorageWriter;
+import org.apache.kafka.connect.storage.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import io.debezium.annotation.ThreadSafe;
-import io.debezium.config.Configuration;
-import io.debezium.config.Field;
-import io.debezium.config.Instantiator;
-import io.debezium.engine.DebeziumEngine;
-import io.debezium.engine.StopEngineException;
-import io.debezium.engine.spi.OffsetCommitPolicy;
-import io.debezium.pipeline.ChangeEventSourceCoordinator;
-import io.debezium.util.Clock;
-import io.debezium.util.VariableLatch;
+import java.io.IOException;
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 /**
  * A mechanism for running a single Kafka Connect {@link SourceConnector} within an application's process. An embedded connector
@@ -96,6 +79,16 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
     /**
      * An optional field that specifies the name of the class that implements the {@link OffsetBackingStore} interface,
      * and that will be used to store offsets recorded by the connector.
+     * 一个可选字段，指定实现 {@link OffsetBackingStore} 接口的类的名称，并将用于存储连接器记录的偏移量。
+     * <p>
+     * 背景：
+     * 目前，Kafka 官网最新版[0.10.1.1]，已默认将消费的 offset 迁入到了 Kafka 一个名为 __consumer_offsets 的Topic中。
+     * 其实，早在 0.8.2.2 版本，已支持存入消费的 offset 到Topic中，只是那时候默认是将消费的 offset 存放在 Zookeeper 集群中。
+     * 那现在，官方默认将消费的offset存储在 Kafka 的Topic中，同时，也保留了存储在 Zookeeper 的接口，通过 offsets.storage 属性来进行设置。
+     * 在新版 Kafka 以及之后的版本，Kafka 消费的offset都会默认存放在 Kafka 集群中的一个叫 __consumer_offsets 的topic中。
+     * 当然，其实她实现的原理也让我们很熟悉，利用 Kafka 自身的 Topic，以消费的Group，Topic，以及Partition做为组合 Key。所有的消费offset都提交写入到上述的Topic中
+     * <p>
+     * offsetStorage：有效的选项是"zookeeper","kafka","storm"。0.9版本以后，offset存储的位置在kafka。
      */
     public static final Field OFFSET_STORAGE = Field.create("offset.storage")
             .withDescription("The Java class that implements the `OffsetBackingStore` "
@@ -376,9 +369,9 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
          * This method returns immediately if the connector has completed already.
          *
          * @param timeout the maximum time to wait
-         * @param unit the time unit of the {@code timeout} argument
+         * @param unit    the time unit of the {@code timeout} argument
          * @return {@code true} if the completion was received, or {@code false} if the waiting time elapsed before the completion
-         *         was received.
+         * was received.
          * @throws InterruptedException if the current thread is interrupted while waiting
          */
         public boolean await(long timeout, TimeUnit unit) throws InterruptedException {
@@ -389,7 +382,7 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
          * Determine if the connector has completed.
          *
          * @return {@code true} if the connector has completed, or {@code false} if the connector is still running and this
-         *         callback has not yet been {@link #handle(boolean, String, Throwable) notified}
+         * callback has not yet been {@link #handle(boolean, String, Throwable) notified}
          */
         public boolean hasCompleted() {
             return completed.getCount() == 0;
@@ -399,7 +392,7 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
          * Get whether the connector completed normally.
          *
          * @return {@code true} if the connector completed normally, or {@code false} if the connector produced an error that
-         *         prevented startup or premature termination (or the connector has not yet {@link #hasCompleted() completed})
+         * prevented startup or premature termination (or the connector has not yet {@link #hasCompleted() completed})
          */
         public boolean success() {
             return success;
@@ -427,7 +420,7 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
          * Determine if there is a completion error.
          *
          * @return {@code true} if there is a {@link #error completion error}, or {@code false} if there is no error or
-         *         the connector has not yet {@link #hasCompleted() completed}
+         * the connector has not yet {@link #hasCompleted() completed}
          */
         public boolean hasError() {
             return error != null;
@@ -471,8 +464,7 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
                     try {
                         consumer.accept(record);
                         committer.markProcessed(record);
-                    }
-                    catch (StopConnectorException | StopEngineException ex) {
+                    } catch (StopConnectorException | StopEngineException ex) {
                         // ensure that we mark the record as finished
                         // in this case
                         committer.markProcessed(record);
@@ -651,7 +643,7 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
             final String engineName = config.getString(ENGINE_NAME);
             final String connectorClassName = config.getString(CONNECTOR_CLASS);
             final Optional<DebeziumEngine.ConnectorCallback> connectorCallback = Optional.ofNullable(this.connectorCallback);
-            // Only one thread can be in this part of the method at a time ...
+            // Only one thread can be in this part of the method at a time ...一次只能有一个线程位于方法的这一部分。
             latch.countUp();
             try {
                 if (!config.validateAndRecord(CONNECTOR_FIELDS, LOGGER::error)) {
@@ -659,37 +651,42 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
                     return;
                 }
 
-                // Instantiate the connector ...
+                // Instantiate the connector ... 这里就是mysqlConnector
                 SourceConnector connector = null;
                 try {
                     @SuppressWarnings("unchecked")
                     Class<? extends SourceConnector> connectorClass = (Class<SourceConnector>) classLoader.loadClass(connectorClassName);
                     connector = connectorClass.getDeclaredConstructor().newInstance();
-                }
-                catch (Throwable t) {
+                } catch (Throwable t) {
                     fail("Unable to instantiate connector class '" + connectorClassName + "'", t);
                     return;
                 }
 
-                // Instantiate the offset store ...
+                // Instantiate the offset store ...  指定了是FileOffsetBackingStore
                 final String offsetStoreClassName = config.getString(OFFSET_STORAGE);
+                //config中设置了OffsetBackingStore是FileOffsetBackingStore，这个类继承自MemoryoffsetBackingStore
                 OffsetBackingStore offsetStore = null;
                 try {
                     @SuppressWarnings("unchecked")
                     Class<? extends OffsetBackingStore> offsetStoreClass = (Class<OffsetBackingStore>) classLoader.loadClass(offsetStoreClassName);
                     offsetStore = offsetStoreClass.getDeclaredConstructor().newInstance();
-                }
-                catch (Throwable t) {
+                } catch (Throwable t) {
                     fail("Unable to instantiate OffsetBackingStore class '" + offsetStoreClassName + "'", t);
                     return;
                 }
 
                 // Initialize the offset store ...
                 try {
+                    //new File(offset路径)
+                    //  .with("offset.storage", "org.apache.kafka.connect.storage.FileOffsetBackingStore")
+                    //                .with("offset.storage.file.filename", "D:\\tempFiles\\DebeziumLearn\\data\\student-offset.dat")
+
                     offsetStore.configure(workerConfig);
+                    //start方法汇中首先执行父类MemoryBackingOffset的start： executor = Executors.newFixedThreadPool(1, ThreadUtils.createThreadFactory(
+                    //                this.getClass().getSimpleName() + "-%d", false));创建了一个线程池
+
                     offsetStore.start();
-                }
-                catch (Throwable t) {
+                } catch (Throwable t) {
                     fail("Unable to configure and start the '" + offsetStoreClassName + "' offset backing store", t);
                     return;
                 }
@@ -723,9 +720,13 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
 
                 try {
                     // Start the connector with the given properties and get the task configurations ...
+                    //将config属性设置到MySQLConnector中，MySQLConnector的start方法本身并没有逻辑，内部仅仅是保存一下config属性
+                    //然后这个config属性将会作为Connector 关联的task的config属性
                     connector.start(config.asMap());
+                    //问题 ifPresent 接收的是一个Consumer类型的
                     connectorCallback.ifPresent(DebeziumEngine.ConnectorCallback::connectorStarted);
                     List<Map<String, String>> taskConfigs = connector.taskConfigs(1);
+                    //获取Connector的task对象
                     Class<? extends Task> taskClass = connector.taskClass();
                     if (taskConfigs.isEmpty()) {
                         String msg = "Unable to start connector's task class '" + taskClass.getName() + "' with no task configuration";
@@ -735,8 +736,7 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
                     task = null;
                     try {
                         task = (SourceTask) taskClass.getDeclaredConstructor().newInstance();
-                    }
-                    catch (IllegalAccessException | InstantiationException t) {
+                    } catch (IllegalAccessException | InstantiationException t) {
                         fail("Unable to instantiate connector's task class '" + taskClass.getName() + "'", t);
                         return;
                     }
@@ -755,10 +755,21 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
                             }
                         };
                         task.initialize(taskContext);
+                        /*
+                          task是MySQLConnectorTask，这个地方会启动BinlogReader和SnapshotReader，其中
+                          BinlogReader本身持有一个BinaryLogClient，在BinLogReader的的doStart方法内部会通过
+                           binaryLogClient.connect(timeout); 这个BinaryLogClient不是Debezium的类，
+                           在BinaryLogClient的connect方法中调用了listenForEventPackets，这个listen方法内部while循环读取数据，
+                           读取到数据之后调用   notifyEventListeners(event); 而BinlogReader本身就作为一个Listener，因此读取到的 数据
+                           被交给BinlogReader的handleUpdate 或者handleInsert方法处理，在handle方法内部会将event塞入到队列，也就是
+                          AbstractReader的enqueuedRecord方法内部实现.
+                          在下文中while循环中使用了  changeRecords = task.poll(); // blocks until there are values ...来获取数据
+                          这里的task就是MySQLConnectorTask，而MySqlConnectorTask的poll方法内部委托给了BinLogReader的poll，也就是
+                          MySQLConnectortask的poll最终将会从BinLogReader（AbstractReader）的队列中取出event
+                         */
                         task.start(taskConfigs.get(0));
                         connectorCallback.ifPresent(DebeziumEngine.ConnectorCallback::taskStarted);
-                    }
-                    catch (Throwable t) {
+                    } catch (Throwable t) {
                         // Mask the passwords ...
                         Configuration config = Configuration.from(taskConfigs.get(0)).withMaskedPasswords();
                         String msg = "Unable to initialize and start connector's task class '" + taskClass.getName() + "' with config: "
@@ -778,8 +789,7 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
                                 LOGGER.debug("Embedded engine is polling task for records on thread {}", runningThread.get());
                                 changeRecords = task.poll(); // blocks until there are values ...
                                 LOGGER.debug("Embedded engine returned from polling task for records");
-                            }
-                            catch (InterruptedException e) {
+                            } catch (InterruptedException e) {
                                 // Interrupted while polling ...
                                 LOGGER.debug("Embedded engine interrupted on thread {} while polling the task for records", runningThread.get());
                                 if (this.runningThread.get() == Thread.currentThread()) {
@@ -789,8 +799,7 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
                                     Thread.currentThread().interrupt();
                                 }
                                 break;
-                            }
-                            catch (RetriableException e) {
+                            } catch (RetriableException e) {
                                 LOGGER.info("Retrieable exception thrown, connector will be restarted", e);
                                 // Retriable exception should be ignored by the engine
                                 // and no change records delivered.
@@ -810,23 +819,19 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
 
                                     try {
                                         handler.handleBatch(changeRecords, committer);
-                                    }
-                                    catch (StopConnectorException e) {
+                                    } catch (StopConnectorException e) {
                                         break;
                                     }
-                                }
-                                else {
+                                } else {
                                     LOGGER.debug("Received no records from the task");
                                 }
-                            }
-                            catch (Throwable t) {
+                            } catch (Throwable t) {
                                 // There was some sort of unexpected exception, so we should stop work
                                 handlerError = t;
                                 break;
                             }
                         }
-                    }
-                    finally {
+                    } finally {
                         if (handlerError != null) {
                             // There was an error in the handler so make sure it's always captured...
                             fail("Stopping connector after error in the application's handler method: " + handlerError.getMessage(),
@@ -843,39 +848,31 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
                                 // We stopped normally ...
                                 succeed("Connector '" + connectorClassName + "' completed normally.");
                             }
-                        }
-                        catch (InterruptedException e) {
+                        } catch (InterruptedException e) {
                             LOGGER.debug("Interrupted while committing offsets");
                             Thread.currentThread().interrupt();
-                        }
-                        catch (Throwable t) {
+                        } catch (Throwable t) {
                             fail("Error while trying to stop the task and commit the offsets", t);
                         }
                     }
-                }
-                catch (Throwable t) {
+                } catch (Throwable t) {
                     fail("Error while trying to run connector class '" + connectorClassName + "'", t);
-                }
-                finally {
+                } finally {
                     // Close the offset storage and finally the connector ...
                     try {
                         offsetStore.stop();
-                    }
-                    catch (Throwable t) {
+                    } catch (Throwable t) {
                         fail("Error while trying to stop the offset store", t);
-                    }
-                    finally {
+                    } finally {
                         try {
                             connector.stop();
                             connectorCallback.ifPresent(DebeziumEngine.ConnectorCallback::connectorStopped);
-                        }
-                        catch (Throwable t) {
+                        } catch (Throwable t) {
                             fail("Error while trying to stop connector class '" + connectorClassName + "'", t);
                         }
                     }
                 }
-            }
-            finally {
+            } finally {
                 latch.countDown();
                 runningThread.set(null);
                 // after we've "shut down" the engine, fire the completion callback based on the results we collected
@@ -887,8 +884,9 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
     /**
      * Creates a new RecordCommitter that is responsible for informing the engine
      * about the updates to the given batch
-     * @param offsetWriter the offsetWriter current in use
-     * @param task the sourcetask
+     *
+     * @param offsetWriter  the offsetWriter current in use
+     * @param task          the sourcetask
      * @param commitTimeout the time in ms until a commit times out
      * @return the new recordCommitter to be used for a given batch
      */
@@ -912,10 +910,10 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
     /**
      * Determine if we should flush offsets to storage, and if so then attempt to flush offsets.
      *
-     * @param offsetWriter the offset storage writer; may not be null
-     * @param policy the offset commit policy; may not be null
+     * @param offsetWriter  the offset storage writer; may not be null
+     * @param policy        the offset commit policy; may not be null
      * @param commitTimeout the timeout to wait for commit results
-     * @param task the task which produced the records for which the offsets have been committed
+     * @param task          the task which produced the records for which the offsets have been committed
      */
     protected void maybeFlush(OffsetStorageWriter offsetWriter, OffsetCommitPolicy policy, Duration commitTimeout,
                               SourceTask task)
@@ -930,9 +928,9 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
     /**
      * Flush offsets to storage.
      *
-     * @param offsetWriter the offset storage writer; may not be null
+     * @param offsetWriter  the offset storage writer; may not be null
      * @param commitTimeout the timeout to wait for commit results
-     * @param task the task which produced the records for which the offsets have been committed
+     * @param task          the task which produced the records for which the offsets have been committed
      */
     protected void commitOffsets(OffsetStorageWriter offsetWriter, Duration commitTimeout, SourceTask task) throws InterruptedException {
         long started = clock.currentTimeInMillis();
@@ -952,8 +950,7 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
             task.commit();
             recordsSinceLastCommit = 0;
             timeOfLastCommitMillis = clock.currentTimeInMillis();
-        }
-        catch (InterruptedException e) {
+        } catch (InterruptedException e) {
             LOGGER.warn("Flush of {} offsets interrupted, cancelling", this);
             offsetWriter.cancelFlush();
 
@@ -964,12 +961,10 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
                 Thread.currentThread().interrupt();
                 throw e;
             }
-        }
-        catch (ExecutionException e) {
+        } catch (ExecutionException e) {
             LOGGER.error("Flush of {} offsets threw an unexpected exception: ", this, e);
             offsetWriter.cancelFlush();
-        }
-        catch (TimeoutException e) {
+        } catch (TimeoutException e) {
             LOGGER.error("Timed out waiting to flush {} offsets to storage", this);
             offsetWriter.cancelFlush();
         }
@@ -978,8 +973,7 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
     protected void completedFlush(Throwable error, Void result) {
         if (error != null) {
             LOGGER.error("Failed to flush {} offsets to storage: ", this, error);
-        }
-        else {
+        } else {
             LOGGER.trace("Finished flushing {} offsets to storage", this);
         }
     }
@@ -989,7 +983,7 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
      * {@link #await(long, TimeUnit)} for this purpose.
      *
      * @return {@code true} if the connector was {@link #run() running} and will eventually stop, or {@code false} if it was not
-     *         running when this method is called
+     * running when this method is called
      * @see #await(long, TimeUnit)
      */
     public boolean stop() {
@@ -1003,8 +997,7 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
                         .valueOf(System.getProperty(WAIT_FOR_COMPLETION_BEFORE_INTERRUPT_PROP, Long.toString(WAIT_FOR_COMPLETION_BEFORE_INTERRUPT_DEFAULT.toMillis()))));
                 LOGGER.info("Waiting for {} for connector to stop", timeout);
                 latch.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
-            }
-            catch (InterruptedException e) {
+            } catch (InterruptedException e) {
             }
             LOGGER.debug("Interrupting the embedded engine's thread {} (already interrupted: {})", thread, thread.isInterrupted());
             // Interrupt the thread in case it is blocked while polling the task for records ...
@@ -1025,9 +1018,9 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
      * when it completes the second time.
      *
      * @param timeout the maximum amount of time to wait before returning
-     * @param unit the unit of time; may not be null
+     * @param unit    the unit of time; may not be null
      * @return {@code true} if the connector completed within the timeout (or was not running), or {@code false} if it is still
-     *         running when the timeout occurred
+     * running when the timeout occurred
      * @throws InterruptedException if this thread is interrupted while waiting for the completion of the connector
      */
     public boolean await(long timeout, TimeUnit unit) throws InterruptedException {

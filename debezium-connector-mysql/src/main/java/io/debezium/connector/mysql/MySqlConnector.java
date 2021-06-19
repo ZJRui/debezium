@@ -31,12 +31,16 @@ import io.debezium.util.Strings;
  * <p>
  * This connector is configured with the set of properties described in {@link MySqlConnectorConfig}.
  *
- *
+ * Kafka中的Connector
+ * Connector本身并不会直接执行数据搬移的逻辑，他只是负责进行一些配置处理（比如要拷贝哪些数据，从哪里拷贝等），
+ * 同时Connector会在底层创建多个任务来执行真正的工作，这些任务以Task接口进行建模。
+ * Task有两个实现类：SourceTask和Sinktask
  * @author Randall Hauch
  */
 public class MySqlConnector extends SourceConnector {
 
     private Logger logger = LoggerFactory.getLogger(getClass());
+    //这个属性将作为Task的Config属性
     private Map<String, String> props;
 
     public MySqlConnector() {
@@ -47,6 +51,10 @@ public class MySqlConnector extends SourceConnector {
         return Module.version();
     }
 
+    /**
+     * 关注点： MySQLConnector是如何创建  MySQLConnectorTask的，有几个Task
+     * @return
+     */
     @Override
     public Class<? extends Task> taskClass() {
         return MySqlConnectorTask.class;
@@ -59,6 +67,7 @@ public class MySqlConnector extends SourceConnector {
 
     @Override
     public List<Map<String, String>> taskConfigs(int maxTasks) {
+        //参数maxTasks没有使用， 这里将start方法接收到的config属性作为task的属性
         return props == null ? Collections.emptyList() : Collections.singletonList(new HashMap<String, String>(props));
     }
 

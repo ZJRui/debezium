@@ -243,6 +243,7 @@ public final class MySqlTaskContext extends CdcSourceTaskContext {
     public void start() {
         connectionContext.start();
         // Start the MySQL database history, which simply starts up resources but does not recover the history to a specific point
+        ////启动MySQL数据库历史，它只是启动资源，但不恢复历史到一个特定的点
         dbSchema().start();
     }
 

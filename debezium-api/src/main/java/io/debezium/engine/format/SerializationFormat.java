@@ -10,6 +10,7 @@ import io.debezium.engine.DebeziumEngine;
 
 /**
  * The logical description of the output format used by the given instance of {@link DebeziumEngine}.
+ * *给定实例{@link DebeziumEngine}所使用的输出格式的逻辑描述。
  */
 @Incubating
 public interface SerializationFormat<T> {

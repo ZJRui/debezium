@@ -53,6 +53,7 @@ import io.debezium.util.Strings;
 import io.debezium.util.Threads;
 
 /**
+ * 执行 MySQL 服务器快照的组件，并在 {@link MySqlSchema} 中记录架构更改。
  * A component that performs a snapshot of a MySQL server, and records the schema changes in {@link MySqlSchema}.
  *
  * @author Randall Hauch
@@ -130,10 +131,14 @@ public class SnapshotReader extends AbstractReader {
     /**
      * Start the snapshot and return immediately. Once started, the records read from the database can be retrieved using
      * {@link #poll()} until that method returns {@code null}.
+     *
+     * 在MySqlConnectorTask的start方法中创建了 Binlogreader 和SnapshotReader，将这两个reader放置到ChainedReader中，然后
+     * 调用了ChainedReader的start方法，然后执行两个reader的start方法以及doStart方法
      */
     @Override
     protected void doStart() {
         executorService = Threads.newSingleThreadExecutor(MySqlConnector.class, context.getConnectorConfig().getLogicalName(), "snapshot");
+        //注意这个execute方法是在单独的线程中执行的
         executorService.execute(this::execute);
     }
 
@@ -325,6 +330,7 @@ public class SnapshotReader extends AbstractReader {
                 if (!snapshotLockingMode.equals(MySqlConnectorConfig.SnapshotLockingMode.NONE) && useGlobalLock) {
                     try {
                         logger.info("Step 1: flush and obtain global read lock to prevent writes to database");
+                        //对数据库加全局锁  "FLUSH TABLES WITH READ LOCK";
                         sql.set(snapshotLockingMode.getLockStatement());
                         mysql.executeWithoutCommitting(sql.get());
                         lockAcquired = clock.currentTimeInMillis();
@@ -342,7 +348,7 @@ public class SnapshotReader extends AbstractReader {
                 }
 
                 // ------
-                // START TRANSACTION
+                // START TRANSACTION 对存储引擎使用一致性读。根据mysql官网内容，除了REPEATABLE READ事务隔离级别，其它级别下WITH CONSISTENTSNAPSHOT会被忽略。
                 // ------
                 // First, start a transaction and request that a consistent MVCC snapshot is obtained immediately.
                 // See http://dev.mysql.com/doc/refman/5.7/en/commit.html
@@ -355,7 +361,7 @@ public class SnapshotReader extends AbstractReader {
                 isTxnStarted = true;
 
                 // ------------------------------------
-                // READ BINLOG POSITION
+                // READ BINLOG POSITION  step3
                 // ------------------------------------
                 if (!isRunning()) {
                     return;
@@ -364,11 +370,12 @@ public class SnapshotReader extends AbstractReader {
                 if (isLocked) {
                     // Obtain the binlog position and update the SourceInfo in the context. This means that all source records
                     // generated as part of the snapshot will contain the binlog position of the snapshot.
+                    //获取binlog位置并更新上下文中的SourceInfo。这意味着作为快照的一部分生成的所有源记录都将包含快照的 binlog 位置。
                     readBinlogPosition(step++, source, mysql, sql);
                 }
 
                 // -------------------
-                // READ DATABASE NAMES
+                // READ DATABASE NAMES 获取数据库所有可用的表，之后对其进行过滤，得到用户想要的表。
                 // -------------------
                 // Get the list of databases ...
                 if (!isRunning()) {
@@ -499,6 +506,7 @@ public class SnapshotReader extends AbstractReader {
                 // ------
                 // Transform the current schema so that it reflects the *current* state of the MySQL server's contents.
                 // First, get the DROP TABLE and CREATE TABLE statement (with keys and constraint definitions) for our tables ...
+                //转换当前模式，使其反映 MySQL 服务器内容的当前状态。首先，为我们的表获取 DROP TABLE 和 CREATE TABLE 语句（带有键和约束定义）。
 
                 try {
                     logger.info("Step {}: generating DROP and CREATE statements to reflect current database schemas:", step++);

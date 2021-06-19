@@ -63,6 +63,7 @@ public final class MySqlConnectorTask extends BaseSourceTask {
 
     @Override
     public ChangeEventSourceCoordinator start(Configuration config) {
+        //database.server.name属性
         final String serverName = config.getString(MySqlConnectorConfig.SERVER_NAME);
         PreviousContext prevLoggingContext = LoggingContext.forConnector(Module.contextName(), serverName, "task");
 
@@ -70,7 +71,9 @@ public final class MySqlConnectorTask extends BaseSourceTask {
             // Get the offsets for our partition ...
             boolean startWithSnapshot = false;
             boolean snapshotEventsAsInserts = config.getBoolean(MySqlConnectorConfig.SNAPSHOT_EVENTS_AS_INSERTS);
+            //这个partition Map中存储的key是server ，value是serverName
             Map<String, String> partition = Collect.hashMapOf(SourceInfo.SERVER_PARTITION_KEY, serverName);
+            //context.offsetStorageReader是OffsetStorageReaderImpl
             Map<String, ?> offsets = getRestartOffset(context.offsetStorageReader().offset(partition));
             final SourceInfo source;
             if (offsets != null) {

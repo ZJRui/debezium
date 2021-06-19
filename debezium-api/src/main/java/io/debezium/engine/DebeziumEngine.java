@@ -40,6 +40,24 @@ import io.debezium.engine.spi.OffsetCommitPolicy;
  * thread, and a running connector can be stopped either by calling {@link #stop()} from another thread or by interrupting
  * the running thread (e.g., as is the case with {@link ExecutorService#shutdownNow()}).
  *
+ * *在应用程序的进程中运行单个Kafka Connect {@link SourceConnector}的机制。
+ * 引擎
+ * *是完全独立的，只与源系统对话;
+ * 不需要Kafka, Kafka Connect或Zookeeper进程。
+ * 使用引擎的应用程序只需设置一个引擎，并提供一个{@link Consumer function}
+ * * engine将传递所有包含数据库更改事件的记录。
+ * * < p >
+ * *使用引擎，运行连接器的应用程序承担所有容错责任，
+ * *可扩展性和持久性。
+ * 此外，应用程序必须指定引擎如何存储它的关系数据库
+ * *模式历史和偏移量。
+ * 默认情况下，这些信息将存储在内存中，因此在应用程序时将丢失
+ * *重新启动。
+ * * < p >
+ * * Engine被设计为提交给{@link Executor}或{@link execuorservice}，由单个执行
+ * 一个正在运行的连接器可以通过从另一个线程调用{@link #stop()}或中断来停止
+ * *正在运行的线程(如{@link ExecutorService#shutdownNow()})。
+ * ＊
  * @author Randall Hauch
  */
 @Incubating
@@ -103,6 +121,8 @@ public interface DebeziumEngine<R> extends Runnable, Closeable {
     /**
      * Contract passed to {@link ChangeConsumer}s, allowing them to commit single records as they have been processed
      * and to signal that offsets may be flushed eventually.
+     * *契约传递给{@link ChangeConsumer}s，允许它们提交单个记录，因为它们已经被处理
+     * *并表示偏移量最终可能被刷新。
      */
     public static interface RecordCommitter<R> {
 
