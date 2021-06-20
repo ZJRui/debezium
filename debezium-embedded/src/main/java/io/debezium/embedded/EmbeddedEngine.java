@@ -681,10 +681,12 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
                     //  .with("offset.storage", "org.apache.kafka.connect.storage.FileOffsetBackingStore")
                     //                .with("offset.storage.file.filename", "D:\\tempFiles\\DebeziumLearn\\data\\student-offset.dat")
 
+                    //
                     offsetStore.configure(workerConfig);
                     //start方法汇中首先执行父类MemoryBackingOffset的start： executor = Executors.newFixedThreadPool(1, ThreadUtils.createThreadFactory(
                     //                this.getClass().getSimpleName() + "-%d", false));创建了一个线程池
 
+                    //FileOffsetBackingStore的start方法内部会通过load方法读取offset文件
                     offsetStore.start();
                 } catch (Throwable t) {
                     fail("Unable to configure and start the '" + offsetStoreClassName + "' offset backing store", t);
@@ -712,6 +714,22 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
 
                 };
                 connector.initialize(context);
+                /**
+                 * OffsetStorageWriter的主要作用是 保存offset信息到指定的文件中
+                 *  //调用OffsetStorageWriter的doFlush===》FileOffsetBackingStore的set方法
+                 *                             //FileOffsetBackingStore 本身继承自MemoryOffsetBackingStore，set的值会保存到FileOffsetbackingStore的
+                 *                             //成员变量dataMap中，最终通过save方法保存到offset文件中
+                 *
+                 * OffsetStorageWriter和OffsetStorageReader都持有OffsetbackingStore(FileOffsetBackingStore 继承自memoryOffsetBackingStore)对象，
+                 * offsetBackingStore对象的成员属性data保存了offset
+                 * (1)FileOffsetBackingStore 中提供了load 和save方法用于从文件中读取offset放置到data中或者将data中的offset存储到file中
+                 * （2）FileOffsetBackingStore中的set方法被 OffsetStorageWriter的offset 或者flush方法调用，用于向OffsetBackingStore中的data 放入数据
+                 * （3）FileOffsetBackingStore的get方法 被OffsetStorageReader的offset 方法调用
+                 * OffsetStorageWriter的offset方法或者flush方法就是将数据放置到 OffsetBackingStore对象的成员属性data中
+                 *
+                 * convert都是JSONConvert
+                 *
+                 */
                 OffsetStorageWriter offsetWriter = new OffsetStorageWriter(offsetStore, engineName,
                         keyConverter, valueConverter);
                 OffsetStorageReader offsetReader = new OffsetStorageReaderImpl(offsetStore, engineName,
@@ -766,6 +784,10 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
                           在下文中while循环中使用了  changeRecords = task.poll(); // blocks until there are values ...来获取数据
                           这里的task就是MySQLConnectorTask，而MySqlConnectorTask的poll方法内部委托给了BinLogReader的poll，也就是
                           MySQLConnectortask的poll最终将会从BinLogReader（AbstractReader）的队列中取出event
+
+                          listenForEventPackets方法会读取channel.getInputStream()，然后通过eventDeserializer.nextEvent解析为event，
+                          之后调用updateGtidSet、notifyEventListeners、updateClientBinlogFilenameAndPosition方法；
+                          notifyEventListeners方法会遍历eventListeners挨个执行其onEvent方法
                          */
                         task.start(taskConfigs.get(0));
                         connectorCallback.ifPresent(DebeziumEngine.ConnectorCallback::taskStarted);
@@ -843,6 +865,9 @@ public final class EmbeddedEngine implements DebeziumEngine<SourceRecord> {
                             task.stop();
                             connectorCallback.ifPresent(DebeziumEngine.ConnectorCallback::taskStopped);
                             // Always commit offsets that were captured from the source records we actually processed ...
+                            //调用OffsetStorageWriter的doFlush===》FileOffsetBackingStore的set方法
+                            //FileOffsetBackingStore 本身继承自MemoryOffsetBackingStore，set的值会保存到FileOffsetbackingStore的
+                            //成员变量dataMap中，最终通过save方法保存到offset文件中
                             commitOffsets(offsetWriter, commitTimeout, task);
                             if (handlerError == null) {
                                 // We stopped normally ...

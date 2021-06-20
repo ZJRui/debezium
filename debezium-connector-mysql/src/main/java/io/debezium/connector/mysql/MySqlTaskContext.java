@@ -67,6 +67,7 @@ public final class MySqlTaskContext extends CdcSourceTaskContext {
         this.topicSelector = MySqlTopicSelector.defaultSelector(connectorConfig.getLogicalName(), connectorConfig.getHeartbeatTopicsPrefix());
 
         // Set up the source information ...
+        //创建SourceInfo。
         this.source = new SourceInfo(connectorConfig);
 
         // Set up the GTID filter ...

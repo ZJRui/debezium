@@ -147,9 +147,21 @@ final class SourceInfo extends AbstractSourceInfo {
     private Set<TableId> tableIds;
     private String databaseName;
 
+    /**
+     * EmbededEngine run--->MySqlConnectorTask作为sourceTask 调用其start方法---》在MySQLConnectorTask的start方法中 调用了createAndStartTaskContext
+     * 来创建一个TaskContext， 在new MySQLTaskContext方法中 new SourceInfo
+     * @param connectorConfig
+     */
     public SourceInfo(MySqlConnectorConfig connectorConfig) {
         super(connectorConfig);
 
+        //注意SourceInfo中使用了 配置中的config.getLogicalName（） 作为 键值对<server,config.getLogicalName>的value
+        //其中config.getLogicalName 就是 config.getString(SERVER_NAME)=config.get("database.server.name"),
+        //示例：  .with("database.server.name", "server-cdcTopic")
+        //* _serverName_ is the logical name of the connector as specified with the `database.server.name` connector configuration property.
+        //You can configure a {prodname} MySQL connector to produce schema change events that include all DDL statements applied to databases in the MySQL server.
+        // The connector emits these events to a Kafka topic named _serverName_ where _serverName_ is the name of the connector as specified by the `database.server.name` connector configuration property.
+        //您可以配置 {prodname} MySQL 连接器以生成架构更改事件，其中包括应用于 MySQL 服务器中数据库的所有 DDL 语句。 连接器将这些事件发送到名为 _serverName_ 的 Kafka 主题，其中 _serverName_ 是由`database.server.name` 连接器配置属性指定的连接器名称。
         this.sourcePartition = Collect.hashMapOf(SERVER_PARTITION_KEY, connectorConfig.getLogicalName());
         this.tableIds = new HashSet<>();
     }

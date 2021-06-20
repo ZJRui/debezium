@@ -109,6 +109,7 @@ See {link-prefix}:{link-mysql-connector}#mysql-topic-names[default names for top
 === Schema change topic
 
 You can configure a {prodname} MySQL connector to produce schema change events that include all DDL statements applied to databases in the MySQL server. The connector emits these events to a Kafka topic named _serverName_ where _serverName_ is the name of the connector as specified by the `database.server.name` connector configuration property.
+您可以配置 {prodname} MySQL 连接器以生成架构更改事件，其中包括应用于 MySQL 服务器中数据库的所有 DDL 语句。 连接器将这些事件发送到名为 _serverName_ 的 Kafka 主题，其中 _serverName_ 是由`database.server.name` 连接器配置属性指定的连接器名称。
 
 If you choose to use _schema change events_, ensure that you consume records from the schema change topic. The database history topic is for connector use only. 
 
