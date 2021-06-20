@@ -72,7 +72,7 @@ public final class MySqlConnectorTask extends BaseSourceTask {
      */
     @Override
     public ChangeEventSourceCoordinator start(Configuration config) {
-        //database.server.name属性
+        //database.server.name属性: .with("database.server.name", "server-cdcTopic")
         final String serverName = config.getString(MySqlConnectorConfig.SERVER_NAME);
         PreviousContext prevLoggingContext = LoggingContext.forConnector(Module.contextName(), serverName, "task");
 
@@ -83,6 +83,17 @@ public final class MySqlConnectorTask extends BaseSourceTask {
             //这个partition Map中存储的key是server ，value是serverName
             Map<String, String> partition = Collect.hashMapOf(SourceInfo.SERVER_PARTITION_KEY, serverName);
             //context.offsetStorageReader是OffsetStorageReaderImpl
+            /**
+             *
+             * partition是键值对《server,database.server.name》
+             * 然后通过读取offset文件：context.offsetStorageReader().offset(partition)得到一个Map集合属性
+             * "ts_sec" -> {Long@11350} 1624118736
+             * "file" -> "mysql-bin.000012"
+             * "pos" -> {Long@11370} 1521
+             * "row" -> {Long@11380} 1
+             * "server_id" -> {Long@11380} 1
+             * "event" -> {Long@11399} 3
+             */
             Map<String, ?> offsets = getRestartOffset(context.offsetStorageReader().offset(partition));
             final SourceInfo source;
             if (offsets != null) {
@@ -94,12 +105,14 @@ public final class MySqlConnectorTask extends BaseSourceTask {
                 //注意：在createAndStartTaskContext内部 new MySqlTaskContext,MySqlTaskContext构造器中创建了SourceInfo
                 this.taskContext = createAndStartTaskContext(config, filters);
                 this.connectionContext = taskContext.getConnectionContext();
+                //获取MySqlTaskContext中的sourceInfo
                 source = taskContext.source();
                 // Set the position in our source info ...
                 source.setOffset(offsets);
                 logger.info("Found existing offset: {}", offsets);
 
                 // First check if db history is available
+                //如果history文件不存在
                 if (!taskContext.historyExists()) {
                     if (taskContext.isSchemaOnlyRecoverySnapshot()) {
                         startWithSnapshot = true;
@@ -124,6 +137,7 @@ public final class MySqlConnectorTask extends BaseSourceTask {
                     // Before anything else, recover the database history to the specified binlog coordinates ...
                     taskContext.loadHistory(source);
 
+                    //确定快照当前是否有效
                     if (source.isSnapshotInEffect()) {
                         // The last offset was an incomplete snapshot that we cannot recover from...
                         if (taskContext.isSnapshotNeverAllowed()) {
@@ -137,6 +151,7 @@ public final class MySqlConnectorTask extends BaseSourceTask {
                         logger.info("Prior execution was an incomplete snapshot, so starting new snapshot");
                     } else {
                         // No snapshot was in effect, so we should just start reading from the binlog ...
+                        //没有快照生效，所以我们应该从 binlog 开始读取......
                         startWithSnapshot = false;
 
                         // But check to see if the server still has those binlog coordinates ...
@@ -227,6 +242,10 @@ public final class MySqlConnectorTask extends BaseSourceTask {
                                     + "binlog_row_image=FULL and restart the connector.");
                         }
                     }
+                    /**
+                     * 创建BinlogReader对象，Binlogreader对象内部使用了BinaryLogClient对象连接mysql数据库读取Binlog日志。
+                     * 需要注意的是BinaryLogClient的Connect方法中
+                     */
                     BinlogReader binlogReader = new BinlogReader("binlog", taskContext, null);
                     chainedReaderBuilder.addReader(binlogReader);
                 }

@@ -165,7 +165,7 @@ public final class MySqlTaskContext extends CdcSourceTaskContext {
         dbSchema.loadHistory(startingPoint);
 
         // The server's default character set may have changed since we last recorded it in the history,
-        // so we need to see if the history's state does not match ...
+        // so we need to see if the history's state does not match ...服务器的默认字符集自我们上次在历史记录中记录以来可能已更改，因此我们需要查看历史记录的状态是否不匹配......
         String systemCharsetName = variables.get(MySqlSystemVariables.CHARSET_NAME_SERVER);
         String systemCharsetNameFromHistory = dbSchema.systemVariables().getVariable(MySqlSystemVariables.CHARSET_NAME_SERVER);
         if (!Strings.equalsIgnoreCase(systemCharsetName, systemCharsetNameFromHistory)) {

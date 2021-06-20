@@ -313,6 +313,24 @@ public class BinlogReader extends AbstractReader {
         metrics.unregister(logger);
     }
 
+    /**
+     *
+     * BinlogReader的doStart内部调用了BinaryLogClient的connect（long timeout）方法
+     * 在connect方法内部创建了一个线程池，这个线程池的内某一个线程会执行connect操作，也就是说BinaryLogClinent和数据库的链接是在一个单独的线程中启动的
+     * 需要注意的是BinaryLogClient的connect方法中调用了listenForEventPackets方法，这个listener方法是一个阻塞方法 while循环一直从数据库服务器读取数据
+     *
+     * BinLogReader内部的handleInsert handleUpdate方法本身会作为BinaryLogClient的Listener，因此在那个线程中BinaryLogClient读取到数据
+     * 之后会交给BinLogReader的handleInsert handleUpdate方法处理，handle方法内部调用了BinlogReader从AbstractReader继承的enqueueRecord方法
+     * 这些方法会将数据放置到BinlogReader从AbstractReader中继承自属性BlockingQueue<SourceRecord> records;队列中。
+     *
+     *
+     * （1）BinaryLogClient与数据库服务器的链接是在一个单独的线程中。    * 因为BinaryLogClient的connect方法的调用是在 EmbedEngine run --》MySqlConnectorTask start--》ChainedReader start---》BinlogReader doStart方法内
+     *      *
+     *      * 将BinaryLogClient的connect操作放置在了另一个线程中，而不是占用了EmbeddedEngine的run方法所在的线程。因为Engine的run方法所在的线程需要从队列中取出数据。
+     *      *
+     *      * 而BinaryLogClient的connect方法会从数据库服务器读取数据将数据放置到队列中。
+     *
+     */
     @Override
     protected void doStart() {
         context.dbSchema().assureNonEmptySchema();
@@ -407,6 +425,15 @@ public class BinlogReader extends AbstractReader {
             long started = context.getClock().currentTimeInMillis();
             try {
                 logger.debug("Attempting to establish binlog reader connection with timeout of {} ms", timeout);
+
+                /**
+                 *
+                 * connect(long timeout) 内部启动单独的线程池 执行connect操作，连接数据库服务器，连接成功之后 ，connect方法内部会调用阻塞方法
+                 * listenForEventPackets阻塞等待服务器event数据，接收到数据之后将数据放置到Binlogreader 从AbstractReader集成的队列中。
+                 *
+                 *
+                 */
+
                 client.connect(timeout);
                 // Need to wait for keepalive thread to be running, otherwise it can be left orphaned
                 // The problem is with timing. When the close is called too early after connect then
